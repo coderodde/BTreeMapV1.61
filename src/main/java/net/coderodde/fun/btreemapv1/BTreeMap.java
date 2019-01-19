@@ -1,0 +1,870 @@
+package net.coderodde.util;
+
+import java.util.ArrayDeque;
+import java.util.Collection;
+import java.util.ConcurrentModificationException;
+import java.util.Deque;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.Map;
+import java.util.NoSuchElementException;
+import java.util.Set;
+
+public final class BTreeMap<K extends Comparable<? super K>, V> 
+        implements Map<K, V> {
+
+    /**
+     * The minimum number of children of a node.
+     */
+    private static final int MINIMUM_DEGREE = 2;
+
+    /**
+     * The minimum number of children of any non-root internal node.
+     */
+    private static final int DEFAULT_DEGREE = 32;
+
+    /**
+     * This class implements the B-tree nodes.
+     * 
+     * @param <K> the key type. Must be comparable.
+     */
+    private static final class BTreeNode<K extends Comparable<? super K>> {
+
+        /**
+         * The number of key/value pairs in this B-tree node.
+         */
+        int size;
+
+        /**
+         * The array of actual keys of this B-tree node.
+         */
+        K[] keys;
+
+        /**
+         * The array of child nodes of this B-tree node.
+         */
+        BTreeNode<K>[] children;
+
+        final int minimumDegree;
+
+        BTreeNode(int minimumDegree) {
+            this.minimumDegree = minimumDegree;
+            this.keys = (K[]) new Comparable[2 * minimumDegree - 1];
+        }
+
+        void makeInternal() {
+            this.children = new BTreeNode[keys.length + 1];
+        }
+
+        boolean isLeaf() {
+            return children == null;
+        }
+    }
+
+    private int modCount;
+
+    /**
+     * Maps the keys present in this B-tree to their current values.
+     */
+    private final Map<K, V> map = new HashMap<>();
+
+    /**
+     * The root node of this B-tree.
+     */
+    private BTreeNode<K> root;
+
+    private final int minimumDegree;
+
+    public BTreeMap(int degree) {
+        this.minimumDegree = Math.max(degree, MINIMUM_DEGREE);
+        this.root = new BTreeNode(this.minimumDegree);
+    }
+
+    public BTreeMap() {
+        this(DEFAULT_DEGREE);
+    }
+
+    @Override
+    public int size() {
+        return map.size();
+    }
+
+    @Override
+    public boolean isEmpty() {
+        return map.isEmpty();
+    }
+
+    @Override
+    public boolean containsKey(Object key) {
+        return map.containsKey(key);
+    }
+
+    @Override
+    public boolean containsValue(Object value) {
+        throw new UnsupportedOperationException(
+                "This BTreeMap does not support containsValue.");
+    }
+
+    @Override
+    public V get(Object key) {
+        return map.get(key);    
+    }
+
+    private V bTreeSearch(BTreeNode<K> x, K key) {
+        int i = 0;
+
+        while (i < x.size && key.compareTo(x.keys[i]) > 0) {
+            ++i;
+        }
+
+        if (i < x.size && key.compareTo(x.keys[i]) == 0) {
+            return map.get(key);
+        } else if (x.isLeaf()) {
+            return null;
+        } else {
+            return bTreeSearch(x.children[i], key);
+        }
+    }
+
+    @Override
+    public V put(K key, V value) {
+        ++modCount;
+
+        if (map.containsKey(key)) {
+            return map.put(key, value);
+        }
+
+        bTreeInsertKey(key);
+        map.put(key, value);
+        return null;
+    }
+
+    @Override
+    public V remove(Object key) {
+        if (map.containsKey((K) key)) {
+            ++modCount;
+            bTreeDeleteKey(root, (K) key);
+            return map.remove(key);
+        }
+
+        return null;
+    }
+
+    @Override
+    public void putAll(Map<? extends K, ? extends V> m) {
+        for (Map.Entry<? extends K, ? extends V> entry : m.entrySet()) {
+            put(entry.getKey(), entry.getValue());
+        }
+    }
+
+    @Override
+    public void clear() {
+        root = new BTreeNode<>(minimumDegree);
+        modCount += size();
+        map.clear();
+    }
+
+    @Override
+    public Set<K> keySet() {
+        return new KeySet<>();
+    }
+
+    @Override
+    public Collection<V> values() {
+        return map.values();
+//        throw new UnsupportedOperationException(
+//                "This BTreeMap does not support values.");
+    }
+
+    @Override
+    public Set<Map.Entry<K, V>> entrySet() {
+        
+        throw new UnsupportedOperationException(
+                "This BTreeMap does not support entrySet.");
+    }
+
+    public K getMaximumKey() {
+        checkBTreeMapNotEmpty();
+        BTreeNode<K> current = root;
+
+        while (!current.isLeaf()) {
+            current = current.children[current.size];
+        }
+
+        return current.keys[current.size - 1];
+    }
+
+    public K getMinimumKey() {
+        checkBTreeMapNotEmpty();
+        BTreeNode<K> current = root;
+
+        while (!current.isLeaf()) {
+            current = current.children[0];
+        }
+
+        return current.keys[0];
+    }
+
+    public int getMinimumDegree() {
+        return minimumDegree;
+    }
+
+    private final class KeySet<E> implements Set<E> {
+
+        @Override
+        public int size() {
+            return map.size();
+        }
+
+        @Override
+        public boolean isEmpty() {
+            return map.isEmpty();
+        }
+
+        @Override
+        public boolean contains(Object o) {
+            return map.containsKey((K) o);
+        }
+
+        @Override
+        public Iterator<E> iterator() {
+            return new KeySetIterator();
+        }
+
+        @Override
+        public Object[] toArray() {
+            throw new UnsupportedOperationException("Not supported yet."); 
+        }
+
+        @Override
+        public <T> T[] toArray(T[] a) {
+            throw new UnsupportedOperationException("Not supported yet.");
+        }
+
+        @Override
+        public boolean add(E e) {
+            throw new UnsupportedOperationException("Not supported yet.");
+        }
+
+        @Override
+        public boolean remove(Object o) {
+            throw new UnsupportedOperationException("Not supported yet.");
+        }
+
+        @Override
+        public boolean containsAll(Collection<?> c) {
+            throw new UnsupportedOperationException("Not supported yet.");
+        }
+
+        @Override
+        public boolean addAll(Collection<? extends E> c) {
+            throw new UnsupportedOperationException("Not supported yet.");
+        }
+
+        @Override
+        public boolean retainAll(Collection<?> c) {
+            throw new UnsupportedOperationException("Not supported yet.");
+        }
+
+        @Override
+        public boolean removeAll(Collection<?> c) {
+            throw new UnsupportedOperationException("Not supported yet.");
+        }
+
+        @Override
+        public void clear() {
+            throw new UnsupportedOperationException("Not supported yet.");
+        }
+
+        private final class KeySetIterator implements Iterator<E> {
+
+            private final int expectedModificationCount = modCount;
+            private int globalIterated;
+            private int localIterated;
+            private final Deque<BTreeNode<K>> nodeStack = new ArrayDeque<>();
+            private final Deque<Integer> indexStack = new ArrayDeque<>();
+
+            KeySetIterator() {
+                BTreeNode<K> node = root;
+
+                while (node != null) {
+                    nodeStack.addLast(node);
+                    indexStack.addLast(0);
+
+                    if (node.isLeaf()) {
+                        node = null;
+                    } else {
+                        node = node.children[0];
+                    }
+                }
+            }
+
+            @Override
+            public boolean hasNext() {
+                checkModificationCount();
+                return globalIterated < size();
+            }
+
+            @Override
+            public E next() {
+                checkModificationCount();
+
+                if (!hasNext()) {
+                    throw new NoSuchElementException();
+                }
+
+                ++globalIterated;
+
+                if (nodeStack.getLast().isLeaf()) {
+                    int currentIndex = indexStack.removeLast();
+                    BTreeNode<K> currentNode = nodeStack.getLast();
+                    E ret = (E) currentNode.keys[currentIndex];
+
+                    if (++currentIndex == currentNode.size) {
+                        nodeStack.removeLast();
+
+                        while (!indexStack.isEmpty() && 
+                                indexStack.getLast() == 
+                                nodeStack.getLast().size) {
+                            nodeStack.removeLast();
+                            indexStack.removeLast();
+                        }
+                    } else {
+                        indexStack.addLast(currentIndex);
+                    }
+
+                    return ret;
+                } else {
+                    int currentIndex = indexStack.removeLast();
+                    E ret = (E) nodeStack.getLast().keys[currentIndex++];
+                    indexStack.addLast(currentIndex);
+                    nodeStack.addLast(
+                            nodeStack.getLast().children[currentIndex]);
+                    indexStack.addLast(0);
+
+                    while (!nodeStack.getLast().isLeaf()) {
+                        indexStack.addLast(0);
+                        nodeStack.addLast(nodeStack.getLast().children[0]);
+                    }
+
+                    return ret;
+                }
+            }
+
+            private void checkModificationCount() {
+                if (expectedModificationCount != modCount) {
+                    throw new ConcurrentModificationException();
+                }
+            }
+        }
+    }
+
+    private void checkBTreeMapNotEmpty() {
+        if (map.isEmpty()) {
+            throw new NoSuchElementException("This BTreeMap is empty.");
+        }
+    }
+
+    private void bTreeInsertKey(K key) {
+        BTreeNode<K> r = root;
+
+        if (r.size == 2 * minimumDegree - 1) {
+            BTreeNode<K> s = new BTreeNode<>(minimumDegree);
+            root = s;
+            s.makeInternal();
+            s.children[0] = r;
+            bTreeSplitChild(s, 0);
+            bTreeInsertNonFull(s, key);
+        } else {
+            bTreeInsertNonFull(r, key);
+        }
+    }
+
+    private void bTreeSplitChild(BTreeNode<K> x, int i) {
+        BTreeNode<K> z = new BTreeNode<>(minimumDegree);
+        BTreeNode<K> y = x.children[i];
+
+        if (!y.isLeaf()) {
+            z.makeInternal();
+        }
+
+        z.size = minimumDegree - 1;
+
+        for (int j = 0; j < minimumDegree - 1; ++j) {
+            z.keys[j] = y.keys[j + minimumDegree];
+            y.keys[j + minimumDegree] = null;
+        }
+
+        if (!y.isLeaf()) {
+            for (int j = 0; j < minimumDegree; ++j) {
+                z.children[j] = y.children[j + minimumDegree];
+                y.children[j + minimumDegree] = null;
+            }
+        }
+
+        int oldSizeOfY = y.size;
+        y.size = minimumDegree - 1;
+        K pushUpKey = y.keys[minimumDegree - 1];
+
+        for (int j = y.size; j < oldSizeOfY; ++j) {
+            y.keys[j] = null;
+        }
+
+        for (int j = x.size; j >= i; --j) {
+            x.children[j + 1] = x.children[j];
+        }
+
+        x.children[i + 1] = z;
+
+        for (int j = x.size - 1; j >= i; --j) {
+            x.keys[j + 1] = x.keys[j];
+        }
+
+        x.keys[i] = pushUpKey;
+        x.size++;
+    }
+
+    private void bTreeInsertNonFull(BTreeNode<K> x, K k) {
+        int i = x.size - 1;
+
+        if (x.isLeaf()) {
+            while (i >= 0 && k.compareTo(x.keys[i]) < 0) {
+                x.keys[i + 1] = x.keys[i];
+                --i;
+            }
+
+            x.keys[i + 1] = k; // ?
+            x.size++;
+        } else {
+            while (i >= 0 && k.compareTo(x.keys[i]) < 0) {
+                --i;
+            }
+
+            ++i;
+
+            if (x.children[i].size == 2 * minimumDegree - 1) {
+                bTreeSplitChild(x, i);
+
+                if (k.compareTo(x.keys[i]) > 0) {
+                    i++;
+                }
+            }
+
+            bTreeInsertNonFull(x.children[i], k);
+        }
+    }
+
+    private static <K extends Comparable<? super K>> 
+        BTreeNode<K> getMinimumNode(BTreeNode<K> x) {
+        while (!x.isLeaf()) {
+            x = x.children[0];
+        }
+
+        return x;
+    }
+
+    private static <K extends Comparable<? super K>> 
+        BTreeNode<K> getMaximumNode(BTreeNode<K> x) {
+        while (!x.isLeaf()) {
+            x = x.children[x.size];
+        }
+
+        return  x;
+    }
+
+    private void bTreeDeleteKey(BTreeNode<K> x, K key) {
+        int keyIndex = findKeyIndex(x, key);
+
+        if (keyIndex >= 0) {
+            if (x.isLeaf()) {
+                // Case 1:
+                removeFromLeafNode(x, keyIndex);
+                return;
+            }
+
+            BTreeNode<K> y = x.children[keyIndex];
+
+            if (y.size >= minimumDegree) {
+                // Case 2a:
+                BTreeNode<K> tmp = getMaximumNode(y);
+                K keyPrime = tmp.keys[tmp.size - 1];
+                bTreeDeleteKey(y, keyPrime);
+                x.keys[keyIndex] = keyPrime;
+                return;
+            }
+
+            BTreeNode<K> z = x.children[keyIndex + 1];
+
+            if (z.size >= minimumDegree) {
+                // Case 2b:
+                BTreeNode<K> tmp = getMinimumNode(z);
+                K keyPrime = tmp.keys[0];
+                bTreeDeleteKey(z, keyPrime);
+                x.keys[keyIndex] = keyPrime;
+                return;
+            }
+
+            // Case 2c:
+            // Merge 'key' and all contents of 'z' to the end of 'y'
+            y.keys[y.size] = key;
+
+            for (int i = 0, j = y.size + 1; i != z.size; ++i, ++j) {
+                y.keys[j] = z.keys[i];
+            }
+
+            if (!y.isLeaf()) {
+                for (int i = 0, j = y.size + 1; i != z.size + 1; ++i, ++j) {
+                    y.children[j] = z.children[i];
+                }
+            }
+
+            y.size = 2 * minimumDegree - 1;
+
+            if (!y.isLeaf()) {
+                y.children[y.size] = z.children[z.size];
+            }
+
+            for (int i = keyIndex + 1; i < x.size; ++i) {
+                x.keys[i - 1] = x.keys[i];
+                x.children[i] = x.children[i + 1];
+            }
+
+            x.children[x.size] = null;
+            x.keys[--x.size] = null;
+            bTreeDeleteKey(y, key);
+
+            if (x.size == 0) {
+                root = y;
+            }
+        } else { // keyIndex == -1.
+            int childIndex = -1;
+
+            for (int i = 0; i < x.size; ++i) {
+                if (key.compareTo(x.keys[i]) < 0) {
+                    childIndex = i;
+                    break;
+                }
+            }
+
+            if (childIndex == -1) {
+                childIndex = x.size;
+            }
+
+            BTreeNode<K> targetChild = x.children[childIndex];
+
+            if (targetChild.size == minimumDegree - 1) {
+                if (childIndex > 0 
+                        && x.children[childIndex - 1].size >= minimumDegree) {
+                    // Case 3a: Move from left sibling:
+                    if (targetChild.isLeaf()) {
+                        BTreeNode<K> leftSibling = x.children[childIndex - 1];
+
+                        K lastLeftSiblingKey = 
+                                leftSibling.keys[leftSibling.size - 1];
+
+                        K keyToPushDown = x.keys[childIndex - 1];
+                        x.keys[childIndex - 1] = lastLeftSiblingKey;
+
+                        // Shift *all* the stuff in targetChild one step to the 
+                        // right:
+                        for (int i = targetChild.size - 1; i >= 0; --i) {
+                            targetChild.keys[i + 1] = targetChild.keys[i];
+                        }
+
+                        targetChild.size++;
+                        targetChild.keys[0] = keyToPushDown;
+                        leftSibling.keys[--leftSibling.size] = null;
+                    } else {
+                        BTreeNode<K> leftSibling = x.children[childIndex - 1];
+
+                        K lastLeftSiblingKey = 
+                                leftSibling.keys[leftSibling.size - 1];
+
+                        BTreeNode<K> lastLeftSiblingChild = 
+                                leftSibling.children[leftSibling.size];
+
+                        K keyToPushDown = x.keys[childIndex - 1];
+                        x.keys[childIndex - 1] = lastLeftSiblingKey;
+
+                        // Shift *all* the stuff in targetChild one step to the 
+                        // right:
+                        targetChild.children[targetChild.size + 1] = 
+                                targetChild.children[targetChild.size];
+
+                        for (int i = targetChild.size - 1; i >= 0; --i) {
+                            targetChild.keys[i + 1] = targetChild.keys[i];
+                            targetChild.children[i + 1] = 
+                                    targetChild.children[i];
+                        }
+
+                        targetChild.size++;
+                        targetChild.keys[0] = keyToPushDown;
+                        targetChild.children[0] = lastLeftSiblingChild;
+                        leftSibling.children[leftSibling.size] = null;
+                        leftSibling.keys[--leftSibling.size] = null;
+                    }
+                } else if (childIndex < x.size
+                        && x.children[childIndex + 1].size >= minimumDegree) {
+                    // Case 3a once again, but with the right sibling:
+                    if (targetChild.isLeaf()) {
+                        BTreeNode<K> rightSibling = x.children[childIndex + 1];
+
+                        K firstRightSiblingKey = rightSibling.keys[0];
+
+                        K keyToPushDown = x.keys[childIndex];
+                        x.keys[childIndex] = firstRightSiblingKey;
+
+                        // Shift all the stuff in the right sibling one step to 
+                        // the left:
+                        for (int i = 1; i < rightSibling.size; ++i) {
+                            rightSibling.keys[i - 1] = rightSibling.keys[i];
+                        }
+
+                        rightSibling.keys[--rightSibling.size] = null;
+
+                        // Append 'keyToPushDown' to 'targetChild':
+                        targetChild.keys[targetChild.size] = keyToPushDown;
+                        targetChild.size++;
+                    } else {
+                        BTreeNode<K> rightSibling = x.children[childIndex + 1];
+
+                        K firstRightSiblingKey = rightSibling.keys[0];
+                        BTreeNode<K> firstRightSiblingChild = 
+                                rightSibling.children[0];
+
+                        K keyToPushDown = x.keys[childIndex];
+                        x.keys[childIndex] = firstRightSiblingKey;
+
+                        // Shift all the stuff in the right sibling one step to 
+                        // the left:
+                        for (int i = 1; i < rightSibling.size; ++i) {
+                            rightSibling.keys[i - 1] = rightSibling.keys[i];
+                            rightSibling.children[i - 1] = 
+                                    rightSibling.children[i];
+                        }
+
+                        // Shit is here! 6.3.2017 klo 14:58
+                        rightSibling.children[rightSibling.size - 1] = 
+                                rightSibling.children[rightSibling.size];
+                        rightSibling.children[rightSibling.size] = null;
+                        rightSibling.keys[--rightSibling.size] = null;
+
+                        // Append 'keyToPushDown' to 'targetChild':
+                        targetChild.keys[targetChild.size] = keyToPushDown;
+                        targetChild.children[++targetChild.size] = 
+                                firstRightSiblingChild;
+                    }
+                } else if (childIndex > 0) {
+                    // When we get here, we know that 'targetChild' has left
+                    // sibling.
+                    BTreeNode<K> leftSibling  = x.children[childIndex - 1];
+                    // Case 3b: Merge the left sibling with the target
+                    // child:
+                    if (targetChild.isLeaf()) {
+                        K keyToPushDown = x.keys[childIndex - 1];
+                        leftSibling.keys[leftSibling.size] = keyToPushDown;
+
+                        // Merge the contents of 'targetChild' to 
+                        // 'leftSibling':
+                        for (int i = 0, j = leftSibling.size + 1;
+                                i != targetChild.size; ++i, ++j) {
+                            leftSibling.keys[j] = targetChild.keys[i];
+                        }
+
+                        leftSibling.size = 2 * minimumDegree - 1;
+
+                        // Shit is here
+                        // Shift the contents of 'x' after the pushed down 
+                        // key one position to the left:
+                        for (int i = childIndex; i < x.size; ++i) {
+                            x.keys[i - 1] = x.keys[i];
+                            x.children[i] = x.children[i + 1];
+                        }
+
+                        x.keys[x.size - 1] = null;
+                        x.children[x.size] = null;
+                        x.size--;
+
+                        if (x.size == 0) {
+                            root = leftSibling;
+                        }
+
+                        targetChild = leftSibling;
+                    } else {
+                        K keyToPushDown = x.keys[childIndex - 1];
+                        leftSibling.keys[leftSibling.size] = keyToPushDown;
+
+                        // Merge the contents of 'targetChild' to 
+                        // 'leftSibling':
+                        for (int i = 0, j = leftSibling.size + 1;
+                                i != targetChild.size; ++i, ++j) {
+                            leftSibling.keys[j] = targetChild.keys[i];
+                            leftSibling.children[j] = 
+                                    targetChild.children[i];
+                        }
+
+                        leftSibling.size = 2 * minimumDegree - 1;
+                        leftSibling.children[leftSibling.size] = 
+                                targetChild.children[targetChild.size]; // Don't remove! (16:57 6.3.2017)
+
+                        // Shit is somewhere here.
+                        // Shift the contents of 'x' after the pushed down 
+                        // key one position to the left:
+                        for (int i = childIndex; i < x.size; ++i) {
+                            x.keys[i - 1] = x.keys[i];
+                            x.children[i] = x.children[i + 1];
+                        }
+
+                        x.keys[x.size - 1] = null;
+                        x.children[x.size--] = null;
+//                        x.children[x.size - 1] = x.children[x.size]; // Removed 18:15 (6.3.2017)
+//                        x.children[x.size--] = null; // Same as above.
+
+                        if (x.size == 0) {
+                            root = leftSibling;
+                        }
+
+                        targetChild = leftSibling;
+                    }  
+                } else {
+                    // When we get here, we know that 'targetChild' has right
+                    // sibling.
+                    BTreeNode<K> rightSibling = x.children[childIndex + 1];
+
+                    // Case 3b (for the right sibling): Merge the right sibling
+                    // with the target child:
+                    if (targetChild.isLeaf()) {
+                        // Append the key from 'x' to the end of 'targetChild':
+                        K keyToPushDown = x.keys[childIndex];
+                        targetChild.keys[targetChild.size] = keyToPushDown;
+
+                        // Append the contents of 'rightSibling' to the end of
+                        // 'targetChild':
+                        for (int i = 0, j = targetChild.size + 1; 
+                                i != rightSibling.size; 
+                                ++i, ++j) {
+                            targetChild.keys[j] = rightSibling.keys[i];
+                        }
+
+                        targetChild.size = 2 * minimumDegree - 1;
+
+                        // Shift the contents of 'x' after the pushed down key
+                        // one position to the left:
+                        for (int i = childIndex + 1; i < x.size; ++i) {
+                            x.keys[i - 1] = x.keys[i];
+                            x.children[i] = x.children[i + 1];
+                        }
+
+                        x.children[x.size] = null;
+                        x.keys[--x.size] = null;
+
+                        if (x.size == 0) {
+                            root = targetChild;
+                        }
+                    } else {
+                        // Append the key from 'x' to the end of 'targetChild':
+                        K keyToPushDown = x.keys[childIndex];
+                        targetChild.keys[targetChild.size] = keyToPushDown;
+
+                        // Append the contents of 'rightSibling' to the end of
+                        // 'targetChild':
+                        for (int i = 0, j = targetChild.size + 1; 
+                                i != rightSibling.size; 
+                                ++i, ++j) {
+                            targetChild.keys[j] = rightSibling.keys[i];
+                            targetChild.children[j] = rightSibling.children[i];
+                        }
+
+                        targetChild.size = 2 * minimumDegree - 1;
+                        targetChild.children[targetChild.size] = 
+                                rightSibling.children[rightSibling.size];
+
+                        // Shift the contents of 'x' after the pushed down key
+                        // one position to the left:
+                        for (int i = childIndex + 1; i < x.size; ++i) {
+                            x.keys[i - 1] = x.keys[i];
+                            x.children[i] = x.children[i + 1];
+                        }
+
+                        x.children[x.size - 1] = x.children[x.size];
+                        x.children[x.size] = null;
+                        x.keys[--x.size] = null;
+
+                        if (x.size == 0) {
+                            root = targetChild;
+                        }
+                    }
+                }
+            }
+
+            bTreeDeleteKey(targetChild, key);
+        }
+    }
+
+    private void removeFromLeafNode(BTreeNode<K> x, int removedKeyIndex) {
+        for (int i = removedKeyIndex + 1; i < x.size; ++i) {
+            x.keys[i - 1] = x.keys[i];
+        }
+
+        x.keys[--x.size] = null;
+    }
+
+    private static <K extends Comparable<? super K>> 
+        int findKeyIndex(BTreeNode<K> x, K key) {
+        for (int i = 0; i != x.size; ++i) {
+            if (x.keys[i].compareTo(key) == 0) {
+                return i;
+            }
+        }
+
+        return -1;  
+    }
+
+    public boolean isHealty() {
+        return isHealthy(root);
+    }
+
+    private boolean isHealthy(BTreeNode<K> node) {
+        if (node.size == 0 && node != root) {
+            return false;
+        }
+
+        int count = 0;
+
+        for (int i = 0; i < node.keys.length; ++i) {
+            if (node.keys[i] == null) {
+                break;
+            } else {
+                count++;
+            }
+        }
+
+        if (node.size != count) {
+            return false;
+        }
+
+        if (!node.isLeaf()) {
+            count = 0;
+
+            for (int i = 0; i < node.children.length; ++i) {
+                if (node.children[i] == null) {
+                    break;
+                } else {
+                    count++;
+                }
+            }
+
+            if (count != node.size + 1) {
+                return false;
+            }
+
+            for (int i = 0; i <= node.size; ++i) {
+                if (!isHealthy(node.children[i])) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+}
